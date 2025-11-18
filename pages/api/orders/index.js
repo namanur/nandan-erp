@@ -1,21 +1,31 @@
 import { prisma } from '@/lib/prisma';
 import { sendTelegramNotification, formatOrderNotification, formatLowStockNotification } from '@/services/telegram';
 import { CreateOrderSchema } from '@/lib/validation';
-import { getAdminFromReq } from '@/lib/auth';
+import { getAdminFromReq } from '@/lib/auth'; // Using this for both GET and POST
 
 export default async function handler(req, res) {
-  if (req.method === 'GET') {
-    // Only admin can view orders
-    const admin = getAdminFromReq(req);
-    if (!admin) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
+  // --- MULTI-TENANCY UPGRADE ---
+  // We need the tenantId for ALL operations
+  const admin = getAdminFromReq(req);
+  if (!admin) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const { tenantId } = admin;
+  // --- END UPGRADE ---
 
+  if (req.method === 'GET') {
     try {
       const { page = 1, limit = 50 } = req.query;
       const skip = (parseInt(page) - 1) * parseInt(limit);
 
+      // --- MULTI-TENANCY UPGRADE ---
+      const where = {
+        tenantId: tenantId, // <-- CRITICAL: Filter orders by tenant
+      };
+      // --- END UPGRADE ---
+
       const orders = await prisma.order.findMany({
+        where, // <-- ADDED
         include: {
           customer: true,
           items: {
@@ -29,7 +39,7 @@ export default async function handler(req, res) {
         take: parseInt(limit),
       });
 
-      const total = await prisma.order.count();
+      const total = await prisma.order.count({ where }); // <-- ADDED
 
       res.json({
         orders,
@@ -46,17 +56,15 @@ export default async function handler(req, res) {
     }
   } else if (req.method === 'POST') {
     try {
-      // Validate input
       const validatedData = CreateOrderSchema.parse(req.body);
       const { customer, items, source } = validatedData;
 
       const lowStockThreshold = parseInt(process.env.LOW_STOCK_THRESHOLD) || 5;
 
-      // Use transaction for atomic operations
       const result = await prisma.$transaction(async (tx) => {
-        // Create or find customer with notes
+        // --- MULTI-TENANCY UPGRADE ---
         const customerRecord = await tx.customer.upsert({
-          where: { phone: customer.phone },
+          where: { phone: customer.phone }, // This assumes phone is unique ACROSS tenants. Be careful.
           update: { 
             name: customer.name,
             notes: customer.message || undefined,
@@ -66,29 +74,40 @@ export default async function handler(req, res) {
             phone: customer.phone,
             type: source === 'POS' ? 'PERMANENT' : 'TEMPORARY',
             notes: customer.message || undefined,
+            tenantId: tenantId, // <-- CRITICAL: Assign customer to tenant
           },
         });
+        // --- END UPGRADE ---
 
-        // Check stock availability and create order
+        // Verify customer belongs to this tenant (in case they already existed)
+        if (customerRecord.tenantId !== tenantId) {
+          throw new Error('Customer phone number is associated with another tenant.');
+        }
+
         for (const item of items) {
-          const product = await tx.product.findUnique({
-            where: { id: item.productId },
+          // --- MULTI-TENANCY UPGRADE ---
+          const product = await tx.product.findFirst({ // Use findFirst with tenantId
+            where: { 
+              id: item.productId,
+              tenantId: tenantId, // <-- CRITICAL: Ensure product belongs to this tenant
+            },
           });
+          // --- END UPGRADE ---
 
           if (!product) {
-            throw new Error(`Product ${item.productId} not found`);
+            throw new Error(`Product ${item.productId} not found for this tenant`);
           }
-
           if (product.stock < item.quantity) {
             throw new Error(`Insufficient stock for ${product.title}. Available: ${product.stock}, Requested: ${item.quantity}`);
           }
         }
 
-        // Create order
+        // --- MULTI-TENANCY UPGRADE ---
         const order = await tx.order.create({
           data: {
             source,
             customerId: customerRecord.id,
+            tenantId: tenantId, // <-- CRITICAL: Assign order to tenant
             items: {
               create: items.map(item => ({
                 productId: item.productId,
@@ -105,8 +124,9 @@ export default async function handler(req, res) {
             },
           },
         });
+        // --- END UPGRADE ---
 
-        // Update stock
+        // (Stock update is fine, we already verified the product)
         for (const item of items) {
           await tx.product.update({
             where: { id: item.productId },
@@ -118,7 +138,6 @@ export default async function handler(req, res) {
           });
         }
 
-        // Refetch order with updated product info
         const fullOrder = await tx.order.findUnique({
           where: { id: order.id },
           include: {
@@ -136,16 +155,14 @@ export default async function handler(req, res) {
 
       const { order, customer: customerRecord } = result;
 
-      // Send Telegram notification (outside transaction)
+      // (Notification logic is fine)
       try {
         const notification = formatOrderNotification(order, customerRecord, order.items, source);
         await sendTelegramNotification(notification);
       } catch (telegramError) {
         console.error('Failed to send Telegram notification:', telegramError);
-        // Don't fail the order if notification fails
       }
 
-      // Check for low stock alerts
       for (const item of order.items) {
         if (item.product.stock <= lowStockThreshold) {
           try {
@@ -160,18 +177,15 @@ export default async function handler(req, res) {
       res.status(201).json(order);
     } catch (error) {
       console.error('Order creation error:', error);
-
       if (error.name === 'ZodError') {
         return res.status(400).json({ 
           error: 'Validation failed', 
           details: error.errors 
         });
       }
-
-      if (error.message.includes('Insufficient stock') || error.message.includes('Product not found')) {
+      if (error.message.includes('Insufficient stock') || error.message.includes('Product not found') || error.message.includes('another tenant')) {
         return res.status(409).json({ error: error.message });
       }
-
       res.status(500).json({ 
         error: 'Failed to create order',
         details: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -179,6 +193,6 @@ export default async function handler(req, res) {
     }
   } else {
     res.setHeader('Allow', ['GET', 'POST']);
-    res.status(405).end(`Method ${req.method} Not Allowed`);
+    res.status(4LET'S GO).end(`Method ${req.method} Not Allowed`);
   }
 }

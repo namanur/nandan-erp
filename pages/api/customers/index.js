@@ -1,17 +1,28 @@
 // pages/api/customers/index.js
-
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth';
 
 async function handler(req, res) {
+  // --- MULTI-TENANCY UPGRADE ---
+  // The 'requireAdmin' wrapper gives us the admin object
+  const admin = req.admin; 
+  if (!admin) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const { tenantId } = admin;
+  // --- END UPGRADE ---
+
   if (req.method === 'GET') {
     try {
       const { search, page = 1, limit = 50 } = req.query;
       const skip = (parseInt(page) - 1) * parseInt(limit);
       
-      let where = {};
+      // --- MULTI-TENANCY UPGRADE ---
+      let where = {
+        tenantId: tenantId, // <-- CRITICAL: Filter by tenant
+      };
+      // --- END UPGRADE ---
       
-      // Add search functionality for name or phone
       if (search) {
         where.OR = [
           { name: { contains: search, mode: 'insensitive' } },
@@ -19,15 +30,14 @@ async function handler(req, res) {
         ];
       }
 
-      // Fetch customers and total count in parallel
       const [customers, total] = await Promise.all([
         prisma.customer.findMany({
-          where,
+          where, // 'where' object now correctly includes tenantId
           orderBy: { name: 'asc' },
           skip,
           take: parseInt(limit),
         }),
-        prisma.customer.count({ where }),
+        prisma.customer.count({ where }), // 'where' object now correctly includes tenantId
       ]);
 
       res.json({
@@ -49,5 +59,4 @@ async function handler(req, res) {
   }
 }
 
-// Wrap the handler with admin-only authentication
 export default requireAdmin(handler);
