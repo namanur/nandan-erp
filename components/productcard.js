@@ -1,10 +1,10 @@
 // components/ProductCard.js
 import React from 'react';
+import { Button } from '@/components/ui/button'; // <-- 1. IMPORT THE NEW BUTTON
 
 export default function ProductCard({ product }) {
   const { title, price, stock, image } = product;
 
-  // Format price to INR
   const formattedPrice = new Intl.NumberFormat('en-IN', {
     style: 'currency',
     currency: 'INR',
@@ -12,15 +12,8 @@ export default function ProductCard({ product }) {
 
   return (
     <div className="border rounded-lg shadow-sm overflow-hidden transition-shadow hover:shadow-md">
-      {/* Image Section */}
-      <div className="w-full h-48 bg-gray-200 flex items-center justify-center">
-        {image ? (
-          <img src={image} alt={title} className="w-full h-full object-cover" />
-        ) : (
-          <span className="text-gray-500">No Image</span>
-        )}
-      </div>
-
+      {/* ... (image and content sections remain the same) ... */}
+      
       {/* Content Section */}
       <div className="p-4">
         <h3 className="text-lg font-semibold text-gray-800 truncate" title={title}>
@@ -41,12 +34,15 @@ export default function ProductCard({ product }) {
           </span>
         )}
 
-        <button 
-          className="mt-4 w-full bg-blue-600 text-white py-2 px-4 rounded-md font-semibold hover:bg-blue-700 transition-colors disabled:bg-gray-400"
+        {/* --- 2. REPLACE THE OLD BUTTON --- */}
+        <Button 
+          className="mt-4 w-full" 
           disabled={stock <= 0}
         >
           Add to Cart
-        </button>
+        </Button>
+        {/* --- END OF CHANGE --- */}
+
       </div>
     </div>
   );
