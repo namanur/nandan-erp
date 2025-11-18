@@ -1,3 +1,6 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -6,6 +9,46 @@ datasource db {
   provider = "sqlite"
   url      = env("DATABASE_URL")
 }
+
+// --- 1. CORE SAAS & TENANCY MODELS ---
+
+// A Tenant is a single business/company using your SaaS
+model Tenant {
+  id        String    @id @default(cuid())
+  name      String    // The company's name, e.g., "Nandan Traders"
+  subdomain String?   @unique // For custom URLs, e.g., "nandan.yourapp.com"
+  logoUrl   String?
+  createdAt DateTime  @default(now())
+
+  // A Tenant has...
+  users     User[]
+  products  Product[]
+  customers Customer[]
+  orders    Order[]
+  suppliers Supplier[]
+  purchases PurchaseOrder[]
+  notifications NotificationQueue[]
+}
+
+// A User is an employee (admin, staff) who belongs to a Tenant
+model User {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  name      String?
+  password  String    // Hashed password
+  role      String    @default("STAFF") // Changed from Enum to String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  // Each User belongs to one Tenant
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId  String
+
+  @@index([tenantId])
+}
+
+
+// --- 2. ERP - PILLAR 3 (PRODUCTS & PURCHASING) ---
 
 model Product {
   id          Int       @id @default(autoincrement())
@@ -21,67 +64,152 @@ model Product {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  orderItems OrderItem[]
+  // Belongs to one Tenant
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId    String
+
+  orderItems  OrderItem[]
+  purchaseItems PurchaseOrderItem[]
 
   @@index([title])
   @@index([sku])
   @@index([category])
+  @@index([tenantId])
 }
 
-model Customer {
-  id        Int      @id @default(autoincrement())
-  name      String
-  phone     String   @unique
-  type      String   // "PERMANENT" or "TEMPORARY"
-  notes     String?
-  createdAt DateTime @default(now())
+model Supplier {
+  id          Int       @id @default(autoincrement())
+  name        String
+  contactName String?
+  phone       String?
+  email       String?
+  gstin       String?   @unique
+  address     String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
+  // Belongs to one Tenant
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId    String
+
+  purchases   PurchaseOrder[]
+
+  @@index([name])
+  @@index([tenantId])
+}
+
+model PurchaseOrder {
+  id          Int       @id @default(autoincrement())
+  status      String    @default("DRAFT") // DRAFT, SENT, RECEIVED
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Belongs to one Supplier
+  supplier    Supplier  @relation(fields: [supplierId], references: [id])
+  supplierId  Int
+
+  // Belongs to one Tenant
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId    String
+  
+  items       PurchaseOrderItem[]
+
+  @@index([supplierId])
+  @@index([tenantId])
+}
+
+model PurchaseOrderItem {
+  id          Int       @id @default(autoincrement())
+  quantity    Int
+  costPrice   Float     // Price you paid the supplier
+
+  product     Product   @relation(fields: [productId], references: [id])
+  productId   Int
+  
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  purchaseOrderId Int
+
+  @@index([productId])
+  @@index([purchaseOrderId])
+}
+
+
+// --- 3. SALES - PILLARS 1 & 2 (CUSTOMERS & ORDERS) ---
+
+model Customer {
+  id        Int          @id @default(autoincrement())
+  name      String
+  phone     String       @unique
+  type      String       @default("TEMPORARY") // Changed from Enum to String
+  notes     String?
+  createdAt DateTime     @default(now())
+
+  // Belongs to one Tenant
+  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId  String
+  
   orders    Order[]
 
   @@index([phone])
   @@index([name])
+  @@index([tenantId])
 }
 
 model Order {
-  id        Int       @id @default(autoincrement())
-  source    String    // "PUBLIC" or "POS"
-  status    String    @default("PENDING")
-  createdAt DateTime  @default(now())
+  id        Int         @id @default(autoincrement())
+  source    String      // Changed from Enum to String
+  status    String      @default("PENDING") // Changed from Enum to String
+  createdAt DateTime    @default(now())
 
-  customer   Customer? @relation(fields: [customerId], references: [id])
-  customerId Int?
+  // Customer is optional (for quick POS sales)
+  customer    Customer?   @relation(fields: [customerId], references: [id])
+  customerId  Int?
+
+  // Belongs to one Tenant
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId    String
 
   items     OrderItem[]
 
   @@index([createdAt])
   @@index([status])
   @@index([source])
+  @@index([customerId])
+  @@index([tenantId])
 }
 
 model OrderItem {
-  id        Int      @id @default(autoincrement())
+  id        Int     @id @default(autoincrement())
   quantity  Int
-  price     Float
+  price     Float   // Price at time of sale
 
   product   Product @relation(fields: [productId], references: [id])
   productId Int
 
-  order     Order   @relation(fields: [orderId], references: [id])
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
   orderId   Int
 
   @@index([productId])
   @@index([orderId])
 }
 
+
+// --- 4. SMART AUTOMATION - PILLAR 4 (NOTIFICATIONS) ---
+
 model NotificationQueue {
-  id        Int      @id @default(autoincrement())
-  payload   String
+  id        Int       @id @default(autoincrement())
+  payload   String    // JSON payload for the notification
   error     String?
-  tries     Int      @default(0)
+  tries     Int       @default(0)
   lastTried DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  // Belongs to one Tenant
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId    String
 
   @@index([createdAt])
   @@index([tries])
+  @@index([tenantId])
 }
