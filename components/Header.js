@@ -1,53 +1,42 @@
-import Link from 'next/link';
-import { Button } from '@/components/ui/button';
-import { useTheme } from '@/components/ThemeProvider';
+// components/Header.js
+import React from 'react';
+import { useTheme } from './ThemeProvider';
 
 export function Header() {
-  const { theme, toggleTheme } = useTheme();
-  
-  // Icon based on theme (using simple text icons for broad compatibility)
-  const ThemeIcon = theme === 'dark' ? '☀️' : '🌙';
+  // useContext may return undefined if provider isn't mounted (shouldn't happen if wrapped),
+  // but we guard against it anyway.
+  const ctx = useTheme() || {};
+  const { theme = null, toggleTheme = () => {}, mounted = false } = ctx;
+
+  // If not mounted, avoid rendering theme-dependent text to prevent hydration mismatch.
+  // Show a neutral placeholder or nothing until mounted.
+  const ThemeIcon = mounted ? (theme === 'dark' ? '☀️' : '🌙') : '';
 
   return (
-    <header className="bg-white/95 dark:bg-gray-900/95 shadow-md sticky top-0 z-50 backdrop-blur-sm transition-colors duration-300">
-      <div className="container mx-auto px-4 py-3 flex justify-between items-center">
-        
-        {/* Logo/Title */}
-        <Link href="/" passHref legacyBehavior>
-          <a className="text-3xl font-extrabold text-gray-900 dark:text-gray-50 hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
-            Nandan Traders
-          </a>
-        </Link>
-        
-        {/* Navigation & Actions */}
-        <nav className="flex items-center space-x-4">
-          
-          {/* Main Links */}
-          <Link href="/catalog" passHref legacyBehavior>
-            <a className="text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 font-medium transition-colors hidden sm:block">
-              Catalog
-            </a>
-          </Link>
-          
-          {/* Dark Mode Toggle */}
-          <Button 
-            variant="ghost" 
-            size="icon" 
-            onClick={toggleTheme}
-            className="text-xl"
-            aria-label="Toggle dark mode"
-          >
-            {ThemeIcon}
-          </Button>
+    <header className="w-full py-4 border-b">
+      <div className="container mx-auto flex items-center justify-between px-4">
+        <div className="text-xl font-bold">Nandan Traders</div>
 
-          {/* Proper Login Button */}
-          <Link href="/api/auth/login" passHref legacyBehavior>
-            <Button className="bg-blue-600 hover:bg-blue-700 text-white dark:bg-blue-500 dark:hover:bg-blue-600 transition-colors">
-              Admin Login
-            </Button>
-          </Link>
+        <nav className="flex items-center gap-4">
+          <a href="/catalog" className="text-sm">Catalog</a>
+          <a href="/admin" className="text-sm">Admin Login</a>
+
+          <button
+            onClick={() => {
+              // don't call toggleTheme until mounted is true and theme known
+              if (!mounted) return;
+              toggleTheme();
+            }}
+            aria-label="Toggle theme"
+            className="ml-4 px-3 py-1 rounded-md border"
+          >
+            {/* Icon text — empty until mounted to avoid hydration mismatch */}
+            {ThemeIcon}
+          </button>
         </nav>
       </div>
     </header>
   );
 }
+
+export default Header;

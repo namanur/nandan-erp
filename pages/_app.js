@@ -1,15 +1,17 @@
 // pages/_app.js
 import '../styles/globals.css';
-import { ThemeProvider } from '@/components/ThemeProvider'; // <-- IMPORT ThemeProvider
+import Head from 'next/head';
+import ThemeProvider from '../components/ThemeProvider'; // relative path
 
-function MyApp({ Component, pageProps }) {
-  // Wrap the Component in the ThemeProvider to correctly initialize
-  // the 'bg-background' and 'text-foreground' variables.
+export default function MyApp({ Component, pageProps }) {
   return (
-    <ThemeProvider>
-      <Component {...pageProps} />
-    </ThemeProvider>
+    <>
+      <Head>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+      </Head>
+      <ThemeProvider>
+        <Component {...pageProps} />
+      </ThemeProvider>
+    </>
   );
 }
-
-export default MyApp;

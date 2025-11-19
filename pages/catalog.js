@@ -30,23 +30,20 @@ export default function Catalog({ products }) {
 
 // This runs on the SERVER to fetch data before the page loads
 export async function getServerSideProps(context) {
-  // Using the hardcoded Tenant ID (v1.8 testing mode)
-  // **NOTE**: Replace with your current Tenant ID if you changed it recently.
-  const MY_TENANT_ID = "cmi45sxup0000txu7ojxl9tke"; 
+  // Use TENANT_ID from environment or fallback to the local seed value
+  const MY_TENANT_ID = process.env.TENANT_ID || "local-tenant"; 
 
   const products = await prisma.product.findMany({
     where: {
       tenantId: MY_TENANT_ID,
     },
     select: { 
-      // Explicitly select fields to avoid errors from old schema columns (like 'category')
+      // Explicitly select fields
       id: true,
       title: true,
       price: true,
       stock: true,
       sku: true,
-      // Include Category relation if needed for display:
-      // category: { select: { name: true } }, 
       createdAt: true,
       updatedAt: true,
     },
@@ -55,9 +52,12 @@ export async function getServerSideProps(context) {
     },
   });
 
-  // We must serialize the data (especially Date objects)
+  // We must serialize the data for Next.js (Date and Decimal objects)
   const serializableProducts = products.map(product => ({
     ...product,
+    // CRITICAL FIX: Convert Prisma Decimal object to a serializable number
+    price: product.price.toNumber(),
+    // Convert Date objects to ISO string
     createdAt: product.createdAt.toISOString(),
     updatedAt: product.updatedAt.toISOString(),
   }));
