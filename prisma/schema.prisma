@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,206 +7,82 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// --- 1. CORE SAAS & TENANCY MODELS ---
-
-// A Tenant is a single business/company using your SaaS
-model Tenant {
-  id        String    @id @default(cuid())
-  name      String    // The company's name, e.g., "Nandan Traders"
-  subdomain String?   @unique // For custom URLs, e.g., "nandan.yourapp.com"
-  logoUrl   String?
-  createdAt DateTime  @default(now())
-
-  // A Tenant has...
-  users     User[]
-  products  Product[]
-  customers Customer[]
-  orders    Order[]
-  suppliers Supplier[]
-  purchases PurchaseOrder[]
-  notifications NotificationQueue[]
-}
-
-// A User is an employee (admin, staff) who belongs to a Tenant
 model User {
-  id        String    @id @default(cuid())
-  email     String    @unique
-  name      String?
-  password  String    // Hashed password
-  role      String    @default("STAFF") // Changed from Enum to String
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-
-  // Each User belongs to one Tenant
-  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  tenantId  String
-
-  @@index([tenantId])
+  id        Int      @id @default(autoincrement())
+  username  String   @unique
+  password  String
+  role      String   @default("admin")
+  tenantId  String?
+  createdAt DateTime @default(now())
 }
 
-
-// --- 2. ERP - PILLAR 3 (PRODUCTS & PURCHASING) ---
+model Category {
+  id       Int      @id @default(autoincrement())
+  name     String   @unique
+  slug     String   @unique
+  tenantId String?
+  products Product[]
+}
 
 model Product {
-  id          Int       @id @default(autoincrement())
-  title       String
-  category    String?
-  price       Float
-  stock       Int       @default(0)
-  sku         String?   @unique
-  hsn         String?
-  taxRate     Float?    @default(0)
+  id         Int      @id @default(autoincrement())
+  sku        String?  @unique
+  title      String
   description String?
-  image       String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-
-  // Belongs to one Tenant
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  tenantId    String
-
-  orderItems  OrderItem[]
-  purchaseItems PurchaseOrderItem[]
-
-  @@index([title])
-  @@index([sku])
-  @@index([category])
-  @@index([tenantId])
+  unit       String?
+  price      Decimal
+  costPrice  Decimal?
+  stock      Int      @default(0)
+  tenantId   String?
+  category   Category? @relation(fields: [categoryId], references: [id])
+  categoryId Int?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  OrderItem  OrderItem[]
+  InventoryMovement InventoryMovement[]
 }
 
-model Supplier {
-  id          Int       @id @default(autoincrement())
-  name        String
-  contactName String?
-  phone       String?
-  email       String?
-  gstin       String?   @unique
-  address     String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-
-  // Belongs to one Tenant
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  tenantId    String
-
-  purchases   PurchaseOrder[]
-
-  @@index([name])
-  @@index([tenantId])
+model InventoryMovement {
+  id         Int      @id @default(autoincrement())
+  product    Product  @relation(fields: [productId], references: [id])
+  productId  Int
+  change     Int
+  reason     String
+  ref        String?
+  createdBy  Int?
+  tenantId   String?
+  createdAt  DateTime @default(now())
 }
-
-model PurchaseOrder {
-  id          Int       @id @default(autoincrement())
-  status      String    @default("DRAFT") // DRAFT, SENT, RECEIVED
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-
-  // Belongs to one Supplier
-  supplier    Supplier  @relation(fields: [supplierId], references: [id])
-  supplierId  Int
-
-  // Belongs to one Tenant
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  tenantId    String
-  
-  items       PurchaseOrderItem[]
-
-  @@index([supplierId])
-  @@index([tenantId])
-}
-
-model PurchaseOrderItem {
-  id          Int       @id @default(autoincrement())
-  quantity    Int
-  costPrice   Float     // Price you paid the supplier
-
-  product     Product   @relation(fields: [productId], references: [id])
-  productId   Int
-  
-  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
-  purchaseOrderId Int
-
-  @@index([productId])
-  @@index([purchaseOrderId])
-}
-
-
-// --- 3. SALES - PILLARS 1 & 2 (CUSTOMERS & ORDERS) ---
 
 model Customer {
-  id        Int          @id @default(autoincrement())
+  id        Int     @id @default(autoincrement())
   name      String
-  phone     String       @unique
-  type      String       @default("TEMPORARY") // Changed from Enum to String
+  phone     String  @unique
+  address   String?
   notes     String?
-  createdAt DateTime     @default(now())
-
-  // Belongs to one Tenant
-  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  tenantId  String
-  
-  orders    Order[]
-
-  @@index([phone])
-  @@index([name])
-  @@index([tenantId])
+  tenantId  String?
+  createdAt DateTime @default(now())
+  Order     Order[]
 }
 
 model Order {
-  id        Int         @id @default(autoincrement())
-  source    String      // Changed from Enum to String
-  status    String      @default("PENDING") // Changed from Enum to String
-  createdAt DateTime    @default(now())
-
-  // Customer is optional (for quick POS sales)
-  customer    Customer?   @relation(fields: [customerId], references: [id])
-  customerId  Int?
-
-  // Belongs to one Tenant
-  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  tenantId    String
-
-  items     OrderItem[]
-
-  @@index([createdAt])
-  @@index([status])
-  @@index([source])
-  @@index([customerId])
-  @@index([tenantId])
+  id         Int      @id @default(autoincrement())
+  source     String
+  customer   Customer? @relation(fields: [customerId], references: [id])
+  customerId Int?
+  tenantId   String?
+  total      Decimal?
+  status     String   @default("paid")
+  createdAt  DateTime @default(now())
+  items      OrderItem[]
 }
 
 model OrderItem {
   id        Int     @id @default(autoincrement())
-  quantity  Int
-  price     Float   // Price at time of sale
-
+  order     Order   @relation(fields: [orderId], references: [id])
+  orderId   Int
   product   Product @relation(fields: [productId], references: [id])
   productId Int
-
-  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  orderId   Int
-
-  @@index([productId])
-  @@index([orderId])
-}
-
-
-// --- 4. SMART AUTOMATION - PILLAR 4 (NOTIFICATIONS) ---
-
-model NotificationQueue {
-  id        Int       @id @default(autoincrement())
-  payload   String    // JSON payload for the notification
-  error     String?
-  tries     Int       @default(0)
-  lastTried DateTime?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-
-  // Belongs to one Tenant
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  tenantId    String
-
-  @@index([createdAt])
-  @@index([tries])
-  @@index([tenantId])
+  quantity  Int
+  price     Decimal
 }

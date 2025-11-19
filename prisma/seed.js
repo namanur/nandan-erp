@@ -1,101 +1,64 @@
+// scripts/seed.js
+// Run with: node scripts/seed.js
 const { PrismaClient } = require('@prisma/client');
-const { hashSync } = require('bcryptjs');
-
 const prisma = new PrismaClient();
+const bcrypt = require('bcrypt');
 
 async function main() {
-  console.log('🌱 Starting database seed...');
+  console.log("Seeding database...");
 
-  // Create admin password hash
-  const adminPassword = 'admin123'; // Change this in production!
-  const adminPasswordHash = hashSync(adminPassword, 12);
-  console.log(`🔐 Admin password: ${adminPassword}`);
-  console.log(`🔐 Admin password hash: ${adminPasswordHash}`);
-  console.log('💡 Update ADMIN_PASSWORD_HASH in your .env file with the above hash');
+  const TENANT_ID = process.env.TENANT_ID || "local-tenant";
 
-  // Sample products from the Excel data
-  const products = [
-    {
-      title: "TIBROS TB Mug - Studio Series - small 4 pcs set",
-      price: 128.83,
-      stock: 50,
-      sku: "TB-MUG-SS-4",
-      hsn: "6911",
-      taxRate: 18,
-      category: "Mugs",
-      description: "Premium studio series mug set - 4 pieces"
-    },
-    {
-      title: "TIBROS TB Mug - Studio Series - small 6pcs set",
-      price: 156.00,
-      stock: 30,
-      sku: "TB-MUG-SS-6",
-      hsn: "6911",
-      taxRate: 12,
-      category: "Mugs",
-      description: "Premium studio series mug set - 6 pieces"
-    },
-    {
-      title: "700ML PUSH CHOPPER heavy",
-      price: 110.58,
-      stock: 25,
-      sku: "CHOPPER-700",
-      hsn: "3924",
-      taxRate: 18,
-      category: "Kitchen Tools",
-      description: "Heavy duty 700ml push chopper"
-    },
-    {
-      title: "MAXFRESH | Hot Pot Solitaire 4000",
-      price: 605.00,
-      stock: 15,
-      sku: "SHP4000",
-      hsn: "73239390",
-      taxRate: 12,
-      category: "Cookware",
-      description: "Premium hot pot with advanced features"
-    },
-    {
-      title: "SS JALIROUND JUICER (01)",
-      price: 186.24,
-      stock: 20,
-      sku: "JUICER-SS-01",
-      hsn: "3924",
-      taxRate: 18,
-      category: "Kitchen Tools",
-      description: "Stainless steel round juicer"
-    }
+  const username = "admin";
+  const password = "admin123"; // change after first run
+  const hashed = await bcrypt.hash(password, 10);
+
+  await prisma.user.upsert({
+    where: { username },
+    update: { password: hashed, tenantId: TENANT_ID },
+    create: { username, password: hashed, role: "admin", tenantId: TENANT_ID },
+  });
+  console.log("Admin user created:", username);
+
+  const categories = [
+    { name: "Plates", slug: "plates" },
+    { name: "Glassware", slug: "glassware" },
+    { name: "Cookware", slug: "cookware" },
+    { name: "Utensils", slug: "utensils" }
   ];
 
-  for (const product of products) {
-    await prisma.product.upsert({
-      where: { sku: product.sku },
-      update: {},
-      create: product,
+  for (const c of categories) {
+    await prisma.category.upsert({
+      where: { slug: c.slug },
+      update: { name: c.name, tenantId: TENANT_ID },
+      create: { name: c.name, slug: c.slug, tenantId: TENANT_ID },
     });
-    console.log(`✅ Added product: ${product.title}`);
   }
+  console.log("Categories seeded.");
 
-  // Create sample permanent customer
-  await prisma.customer.upsert({
-    where: { phone: "+919876543210" },
-    update: {},
-    create: {
-      name: "Regular Customer",
-      phone: "+919876543210",
-      type: "PERMANENT",
-      notes: "Sample regular customer"
-    }
-  });
+  const products = [
+    { title: "Ceramic Dinner Plate (10in)", sku: "NT-PLT001", price: 120.00, stock: 50, categorySlug: "plates" },
+    { title: "Glass Tumbler 300ml", sku: "NT-GLS001", price: 60.00, stock: 120, categorySlug: "glassware" },
+    { title: "Stainless Steel Kadai 3L", sku: "NT-KAD001", price: 850.00, stock: 20, categorySlug: "cookware" },
+    { title: "Non-stick Tawa 10in", sku: "NT-TWA001", price: 320.00, stock: 35, categorySlug: "cookware" },
+    { title: "Bamboo Cutting Board (Medium)", sku: "NT-CBD001", price: 220.00, stock: 40, categorySlug: "utensils" }
+  ];
 
-  console.log('🎉 Database seeded successfully!');
+  for (const p of products) {
+    const cat = await prisma.category.findUnique({ where: { slug: p.categorySlug }});
+    await prisma.product.upsert({
+      where: { sku: p.sku },
+      update: { title: p.title, price: p.price, stock: p.stock, categoryId: cat ? cat.id : undefined, tenantId: TENANT_ID },
+      create: { title: p.title, sku: p.sku, price: p.price, stock: p.stock, categoryId: cat ? cat.id : undefined, tenantId: TENANT_ID },
+    });
+  }
+  console.log("Products seeded.");
+
+  await prisma.$disconnect();
+  console.log("Seeding finished.");
 }
 
-main()
-  .catch((e) => {
-    console.error('❌ Seeding failed:', e);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+main().catch(e => {
+  console.error(e);
+  process.exit(1);
+});

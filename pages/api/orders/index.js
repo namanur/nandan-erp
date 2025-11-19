@@ -1,140 +1,113 @@
 import { prisma } from '@/lib/prisma';
 import { sendTelegramNotification, formatOrderNotification, formatLowStockNotification } from '@/services/telegram';
 import { CreateOrderSchema } from '@/lib/validation';
-import { getAdminFromReq } from '@/lib/auth'; // Using this for both GET and POST
+import { getAdminFromReq } from '@/lib/auth';
 
 export default async function handler(req, res) {
-  // --- MULTI-TENANCY UPGRADE ---
-  // We need the tenantId for ALL operations
+
   const admin = getAdminFromReq(req);
-  if (!admin) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+  if (!admin) return res.status(401).json({ error: 'Unauthorized' });
+
   const { tenantId } = admin;
-  // --- END UPGRADE ---
 
   if (req.method === 'GET') {
     try {
       const { page = 1, limit = 50 } = req.query;
-      const skip = (parseInt(page) - 1) * parseInt(limit);
+      const skip = (page - 1) * limit;
 
-      // --- MULTI-TENANCY UPGRADE ---
-      const where = {
-        tenantId: tenantId, // <-- CRITICAL: Filter orders by tenant
-      };
-      // --- END UPGRADE ---
+      const where = { tenantId };
 
       const orders = await prisma.order.findMany({
-        where, // <-- ADDED
+        where,
         include: {
           customer: true,
-          items: {
-            include: {
-              product: true,
-            },
-          },
+          items: { include: { product: true } }
         },
         orderBy: { createdAt: 'desc' },
-        skip,
-        take: parseInt(limit),
+        skip: Number(skip),
+        take: Number(limit)
       });
 
-      const total = await prisma.order.count({ where }); // <-- ADDED
+      const total = await prisma.order.count({ where });
 
-      res.json({
+      return res.json({
         orders,
         pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
+          page: Number(page),
+          limit: Number(limit),
           total,
-          pages: Math.ceil(total / parseInt(limit)),
-        },
+          pages: Math.ceil(total / limit),
+        }
       });
-    } catch (error) {
-      console.error('Failed to fetch orders:', error);
-      res.status(500).json({ error: 'Failed to fetch orders' });
-    }
-  } else if (req.method === 'POST') {
-    try {
-      const validatedData = CreateOrderSchema.parse(req.body);
-      const { customer, items, source } = validatedData;
 
-      const lowStockThreshold = parseInt(process.env.LOW_STOCK_THRESHOLD) || 5;
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: "Failed to fetch orders" });
+    }
+  }
+
+  if (req.method === 'POST') {
+    try {
+      const validated = CreateOrderSchema.parse(req.body);
+      const { customer, items, source } = validated;
+
+      const lowThreshold = process.env.LOW_STOCK_THRESHOLD || 5;
 
       const result = await prisma.$transaction(async (tx) => {
-        // --- MULTI-TENANCY UPGRADE ---
+
         const customerRecord = await tx.customer.upsert({
-          where: { phone: customer.phone }, // This assumes phone is unique ACROSS tenants. Be careful.
-          update: { 
-            name: customer.name,
-            notes: customer.message || undefined,
-          },
+          where: { phone: customer.phone },
+          update: { name: customer.name, notes: customer.message, tenantId },
           create: {
             name: customer.name,
             phone: customer.phone,
+            notes: customer.message,
             type: source === 'POS' ? 'PERMANENT' : 'TEMPORARY',
-            notes: customer.message || undefined,
-            tenantId: tenantId, // <-- CRITICAL: Assign customer to tenant
+            tenantId,
           },
         });
-        // --- END UPGRADE ---
-
-        // Verify customer belongs to this tenant (in case they already existed)
-        if (customerRecord.tenantId !== tenantId) {
-          throw new Error('Customer phone number is associated with another tenant.');
-        }
 
         for (const item of items) {
-          // --- MULTI-TENANCY UPGRADE ---
-          const product = await tx.product.findFirst({ // Use findFirst with tenantId
-            where: { 
-              id: item.productId,
-              tenantId: tenantId, // <-- CRITICAL: Ensure product belongs to this tenant
-            },
+          const product = await tx.product.findFirst({
+            where: { id: item.productId, tenantId }
           });
-          // --- END UPGRADE ---
 
-          if (!product) {
-            throw new Error(`Product ${item.productId} not found for this tenant`);
-          }
-          if (product.stock < item.quantity) {
-            throw new Error(`Insufficient stock for ${product.title}. Available: ${product.stock}, Requested: ${item.quantity}`);
-          }
+          if (!product) throw new Error(`Product not found`);
+          if (product.stock < item.quantity)
+            throw new Error(`Insufficient stock for ${product.title}`);
         }
 
-        // --- MULTI-TENANCY UPGRADE ---
         const order = await tx.order.create({
           data: {
             source,
             customerId: customerRecord.id,
-            tenantId: tenantId, // <-- CRITICAL: Assign order to tenant
+            tenantId,
+            total: items.reduce((sum, i) => sum + i.price * i.quantity, 0),
             items: {
-              create: items.map(item => ({
-                productId: item.productId,
-                quantity: item.quantity,
-                price: item.price,
-              })),
-            },
+              create: items.map(i => ({
+                productId: i.productId,
+                quantity: i.quantity,
+                price: i.price
+              }))
+            }
           },
-          include: {
-            items: {
-              include: {
-                product: true,
-              },
-            },
-          },
+          include: { items: { include: { product: true } } }
         });
-        // --- END UPGRADE ---
 
-        // (Stock update is fine, we already verified the product)
         for (const item of items) {
           await tx.product.update({
             where: { id: item.productId },
+            data: { stock: { decrement: item.quantity } }
+          });
+
+          await tx.inventoryMovement.create({
             data: {
-              stock: {
-                decrement: item.quantity,
-              },
-            },
+              productId: item.productId,
+              tenantId,
+              reason: 'sale',
+              change: -item.quantity,
+              ref: `order:${order.id}`
+            }
           });
         }
 
@@ -142,57 +115,39 @@ export default async function handler(req, res) {
           where: { id: order.id },
           include: {
             customer: true,
-            items: {
-              include: {
-                product: true,
-              },
-            },
-          },
+            items: { include: { product: true } }
+          }
         });
 
-        return { order: fullOrder, customer: customerRecord };
+        return { fullOrder, customerRecord };
       });
 
-      const { order, customer: customerRecord } = result;
+      const { fullOrder, customerRecord } = result;
 
-      // (Notification logic is fine)
       try {
-        const notification = formatOrderNotification(order, customerRecord, order.items, source);
-        await sendTelegramNotification(notification);
-      } catch (telegramError) {
-        console.error('Failed to send Telegram notification:', telegramError);
-      }
+        await sendTelegramNotification(
+          formatOrderNotification(fullOrder, customerRecord, fullOrder.items, source)
+        );
+      } catch (e) {}
 
-      for (const item of order.items) {
-        if (item.product.stock <= lowStockThreshold) {
+      for (const item of fullOrder.items) {
+        if (item.product.stock <= lowThreshold) {
           try {
-            const lowStockNotification = formatLowStockNotification(item.product);
-            await sendTelegramNotification(lowStockNotification);
-          } catch (alertError) {
-            console.error('Failed to send low stock alert:', alertError);
-          }
+            await sendTelegramNotification(
+              formatLowStockNotification(item.product)
+            );
+          } catch (e) {}
         }
       }
 
-      res.status(201).json(order);
+      return res.status(201).json(fullOrder);
+
     } catch (error) {
-      console.error('Order creation error:', error);
-      if (error.name === 'ZodError') {
-        return res.status(400).json({ 
-          error: 'Validation failed', 
-          details: error.errors 
-        });
-      }
-      if (error.message.includes('Insufficient stock') || error.message.includes('Product not found') || error.message.includes('another tenant')) {
-        return res.status(409).json({ error: error.message });
-      }
-      res.status(500).json({ 
-        error: 'Failed to create order',
-        details: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
+      console.error(error);
+      return res.status(400).json({ error: error.message });
     }
-  } else {
-    res.setHeader('Allow', ['GET', 'POST']);
-    res.status(4LET'S GO).end(`Method ${req.method} Not Allowed`);
   }
+
+  res.setHeader("Allow", ["GET", "POST"]);
+  return res.status(405).end(`Method ${req.method} Not Allowed`);
 }
